@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate chan;
 
+use async_std::io;
 use std::error::Error;
 use libp2p::tcp::GenTcpConfig;
 use libp2p::{
@@ -22,7 +23,7 @@ use libp2p::{
 use rand::Rng;
 use std::time::Duration;
 use crate::transport::Boxed;
-use futures::prelude::*;
+use futures::{prelude::*, select};
 
 fn get_psk() -> PreSharedKey {
     let key = rand::thread_rng().gen::<[u8; 32]>();
@@ -36,7 +37,7 @@ pub fn build_transport(
     let noise_config = noise::NoiseAuthenticated::xx(&keypair).unwrap();
 
     TcpTransport::new(GenTcpConfig::default().nodelay(true))
-        .and_then(move |socket,_| PnetConfig::new(psk).handshake(socket))
+        .and_then(move |socket, _| PnetConfig::new(psk).handshake(socket))
         .upgrade(Version::V1)
         .authenticate(noise_config)
         .multiplex(YamuxConfig::default())
@@ -68,12 +69,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         swarm.dial(remote)?;
                         println!("Dialed {}", addr)
                 };
+
+                let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
+
                 loop {
-                    match swarm.select_next_some().await {
-                        SwarmEvent::NewListenAddr { address, .. } => println!("Listening on {:?}", address),
-                        SwarmEvent::Behaviour(event) => println!("{:?}", event),
-                        _ => println!("nothing")
-                    };
+                    select! {
+                        line = stdin.select_next_some() => {
+                            break
+                        },
+                        event = swarm.select_next_some() => {
+                            match event {
+                                SwarmEvent::NewListenAddr { address, .. } => {
+                                    println!("Listening on {:?}", address);
+                                },
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             },
         }
